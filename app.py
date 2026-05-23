@@ -1,6 +1,7 @@
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -9,17 +10,39 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from io import BytesIO
 
-# 日本語フォントを設定する
-plt.rcParams["font.family"] = "Yu Gothic"
 
-# PDF用の日本語フォントを登録する
-# Windows環境想定。Streamlit Cloudで動かす場合は後で別対応する可能性があります。
+# =========================
+# グラフ用：日本語フォント設定
+# =========================
+# ローカルWindowsでは Yu Gothic、
+# Streamlit Cloudでは packages.txt で入れる Noto Sans CJK JP を使う想定
+available_fonts = [font.name for font in fm.fontManager.ttflist]
+
+if "Noto Sans CJK JP" in available_fonts:
+    plt.rcParams["font.family"] = "Noto Sans CJK JP"
+elif "Yu Gothic" in available_fonts:
+    plt.rcParams["font.family"] = "Yu Gothic"
+else:
+    plt.rcParams["font.family"] = "DejaVu Sans"
+
+plt.rcParams["axes.unicode_minus"] = False
+
+
+# =========================
+# PDF用：日本語フォント設定
+# =========================
+# まずはWindowsローカル用に Yu Gothic を試す
+# Streamlit Cloudではこのフォントが存在しない可能性があるため、失敗時はHelveticaに戻す
 try:
     pdfmetrics.registerFont(TTFont("YuGothic", "C:/Windows/Fonts/YuGothM.ttc"))
     PDF_FONT_NAME = "YuGothic"
 except:
     PDF_FONT_NAME = "Helvetica"
 
+
+# =========================
+# 表示名の設定
+# =========================
 COLUMN_LABELS = {
     "date": "日付",
     "staff_name": "担当者",
@@ -44,6 +67,9 @@ VALUE_OPTIONS = {
 }
 
 
+# =========================
+# PDF作成関数
+# =========================
 def create_pdf_report(summary_df, start_date, end_date, group_labels, value_labels, fig):
     pdf_buffer = BytesIO()
     doc = SimpleDocTemplate(pdf_buffer, pagesize=A4)
@@ -100,11 +126,14 @@ def create_pdf_report(summary_df, start_date, end_date, group_labels, value_labe
     return pdf_buffer
 
 
-st.title("CSVレポート自動作成ツール（デモ版）")
+# =========================
+# Streamlit画面
+# =========================
+st.title("CSVレポート自動作成デモ")
 
-st.write(
-    "このツールは、CSVデータの集計・グラフ化・PDF出力の流れを確認するためのツールです。"
-)
+# st.write(
+#     "このツールは、CSVデータの集計・グラフ化・PDF出力を自動化するツールです。"
+# )
 
 uploaded_file = st.file_uploader("CSVファイルをアップロードしてください", type="csv")
 
