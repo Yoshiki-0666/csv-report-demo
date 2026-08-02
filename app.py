@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
+from pathlib import Path
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -12,32 +13,38 @@ from io import BytesIO
 
 
 # =========================
-# グラフ用：日本語フォント設定
+# 日本語フォント設定（PDF・グラフ共通）
 # =========================
-# ローカルWindowsでは Yu Gothic、
-# Streamlit Cloudでは packages.txt で入れる Noto Sans CJK JP を使う想定
-available_fonts = [font.name for font in fm.fontManager.ttflist]
-
-if "Noto Sans CJK JP" in available_fonts:
-    plt.rcParams["font.family"] = "Noto Sans CJK JP"
-elif "Yu Gothic" in available_fonts:
-    plt.rcParams["font.family"] = "Yu Gothic"
-else:
-    plt.rcParams["font.family"] = "DejaVu Sans"
-
-plt.rcParams["axes.unicode_minus"] = False
+APP_DIR = Path(__file__).resolve().parent
+FONT_PATH = APP_DIR / "assets" / "fonts" / "NotoSansJP-Regular.ttf"
+PDF_FONT_NAME = "NotoSansJP"
 
 
-# =========================
-# PDF用：日本語フォント設定
-# =========================
-# まずはWindowsローカル用に Yu Gothic を試す
-# Streamlit Cloudではこのフォントが存在しない可能性があるため、失敗時はHelveticaに戻す
+def configure_japanese_font():
+    """同梱フォントをReportLabとmatplotlibの両方へ登録する。"""
+    if not FONT_PATH.is_file():
+        raise FileNotFoundError(
+            f"日本語フォントが見つかりません: {FONT_PATH}。"
+            "assets/fonts/NotoSansJP-Regular.ttf がGit管理対象か確認してください。"
+        )
+
+    try:
+        pdfmetrics.registerFont(TTFont(PDF_FONT_NAME, str(FONT_PATH)))
+        fm.fontManager.addfont(str(FONT_PATH))
+        matplotlib_font_name = fm.FontProperties(fname=str(FONT_PATH)).get_name()
+        plt.rcParams["font.family"] = matplotlib_font_name
+        plt.rcParams["axes.unicode_minus"] = False
+    except Exception as exc:
+        raise RuntimeError(
+            f"日本語フォントの読み込みに失敗しました: {FONT_PATH}"
+        ) from exc
+
+
 try:
-    pdfmetrics.registerFont(TTFont("YuGothic", "C:/Windows/Fonts/YuGothM.ttc"))
-    PDF_FONT_NAME = "YuGothic"
-except:
-    PDF_FONT_NAME = "Helvetica"
+    configure_japanese_font()
+    FONT_SETUP_ERROR = None
+except (FileNotFoundError, RuntimeError) as exc:
+    FONT_SETUP_ERROR = str(exc)
 
 
 # =========================
@@ -71,6 +78,11 @@ VALUE_OPTIONS = {
 # PDF作成関数
 # =========================
 def create_pdf_report(summary_df, start_date, end_date, group_labels, value_labels, fig):
+    if FONT_SETUP_ERROR:
+        raise RuntimeError(FONT_SETUP_ERROR)
+    if summary_df.empty:
+        raise ValueError("PDFへ出力する集計データがありません。")
+
     pdf_buffer = BytesIO()
     doc = SimpleDocTemplate(pdf_buffer, pagesize=A4)
 
@@ -114,13 +126,19 @@ def create_pdf_report(summary_df, start_date, end_date, group_labels, value_labe
     elements.append(Spacer(1, 20))
 
     image_buffer = BytesIO()
-    fig.savefig(image_buffer, format="png", bbox_inches="tight")
-    image_buffer.seek(0)
+    try:
+        fig.savefig(image_buffer, format="png", bbox_inches="tight")
+        image_buffer.seek(0)
+    except Exception as exc:
+        raise RuntimeError("PDF用グラフ画像の生成に失敗しました。") from exc
 
     chart_image = Image(image_buffer, width=450, height=280)
     elements.append(chart_image)
 
-    doc.build(elements)
+    try:
+        doc.build(elements)
+    except Exception as exc:
+        raise RuntimeError("PDFレポートの生成に失敗しました。") from exc
 
     pdf_buffer.seek(0)
     return pdf_buffer
@@ -131,6 +149,10 @@ def create_pdf_report(summary_df, start_date, end_date, group_labels, value_labe
 # =========================
 st.title("CSVレポート自動作成デモ")
 
+if FONT_SETUP_ERROR:
+    st.error(FONT_SETUP_ERROR)
+    st.stop()
+
 # st.write(
 #     "このツールは、CSVデータの集計・グラフ化・PDF出力を自動化するツールです。"
 # )
@@ -138,9 +160,21 @@ st.title("CSVレポート自動作成デモ")
 uploaded_file = st.file_uploader("CSVファイルをアップロードしてください", type="csv")
 
 if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file)
+    try:
+        df = pd.read_csv(uploaded_file)
+    except Exception:
+        st.error("CSVを読み込めませんでした。文字コードやファイル形式を確認してください。")
+        st.stop()
 
-    df["date"] = pd.to_datetime(df["date"])
+    if "date" not in df.columns:
+        st.error("CSVに必要な列がありません: date")
+        st.stop()
+
+    try:
+        df["date"] = pd.to_datetime(df["date"])
+    except (ValueError, TypeError):
+        st.error("date列を日付として読み込めませんでした。値の形式を確認してください。")
+        st.stop()
 
     display_df = df.rename(columns=COLUMN_LABELS)
 
@@ -173,10 +207,19 @@ if uploaded_file is not None:
     group_columns = [GROUP_OPTIONS[label] for label in selected_group_labels]
     value_columns = [VALUE_OPTIONS[label] for label in selected_value_labels]
 
+    missing_columns = sorted((set(group_columns) | set(value_columns)) - set(df.columns))
+    if missing_columns:
+        st.error(f"CSVに選択した集計に必要な列がありません: {', '.join(missing_columns)}")
+        st.stop()
+
     filtered_df = df[
         (df["date"] >= pd.to_datetime(start_date)) &
         (df["date"] <= pd.to_datetime(end_date))
     ]
+
+    if filtered_df.empty:
+        st.warning("選択した期間に対象データがありません。期間を変更してください。")
+        st.stop()
 
     summary_df = (
         filtered_df
@@ -222,14 +265,18 @@ if uploaded_file is not None:
 
     st.pyplot(fig)
 
-    pdf_file = create_pdf_report(
-        summary_df=summary_display_df,
-        start_date=start_date,
-        end_date=end_date,
-        group_labels=selected_group_labels,
-        value_labels=selected_value_labels,
-        fig=fig
-    )
+    try:
+        pdf_file = create_pdf_report(
+            summary_df=summary_display_df,
+            start_date=start_date,
+            end_date=end_date,
+            group_labels=selected_group_labels,
+            value_labels=selected_value_labels,
+            fig=fig
+        )
+    except (ValueError, RuntimeError) as exc:
+        st.error(str(exc))
+        st.stop()
 
     st.download_button(
         label="PDFレポートをダウンロード",
