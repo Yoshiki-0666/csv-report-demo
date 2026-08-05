@@ -20,6 +20,7 @@ FONT_PATH = APP_DIR / "assets" / "fonts" / "NotoSansJP-Regular.ttf"
 PDF_FONT_NAME = "NotoSansJP"
 
 
+@st.cache_resource
 def configure_japanese_font():
     """同梱フォントをReportLabとmatplotlibの両方へ登録する。"""
     if not FONT_PATH.is_file():
@@ -277,6 +278,9 @@ if uploaded_file is not None:
     except (ValueError, RuntimeError) as exc:
         st.error(str(exc))
         st.stop()
+    finally:
+        # Streamlitの再実行でFigureが蓄積しないよう、必ず解放する。
+        plt.close(fig)
 
     st.download_button(
         label="PDFレポートをダウンロード",
@@ -284,3 +288,4 @@ if uploaded_file is not None:
         file_name="csv_report_demo.pdf",
         mime="application/pdf"
     )
+
